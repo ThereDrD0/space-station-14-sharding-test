@@ -226,6 +226,12 @@ Retrieving pair 2 from pool took 500 ms"""
         self.assertTrue(math.isclose(ratio, 1.3))
         self.assertEqual(missing, [])
 
+        del samples[3, 1]
+        medians, ratio, missing = SHARD_FILTER.summarize_validation(samples, 3, 2)
+        self.assertEqual(medians, {0: 10.0, 1: 12.5})
+        self.assertTrue(math.isclose(ratio, 1.25))
+        self.assertEqual(missing, [(3, 1)])
+
 
 if __name__ == "__main__":
     unittest.main()

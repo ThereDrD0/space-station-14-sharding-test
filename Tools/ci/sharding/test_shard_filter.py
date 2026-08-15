@@ -903,23 +903,22 @@ def load_validation_samples(directory, validation_runs, total_shards, model):
 
 
 def summarize_validation(samples, validation_runs, total_shards):
+    required_runs = math.ceil(validation_runs * 2 / 3)
     expected = {
         (validation_run, shard)
         for validation_run in range(1, validation_runs + 1)
         for shard in range(total_shards)
     }
     missing = sorted(expected - samples.keys())
-    medians = {
-        shard: statistics.median(
+    medians = {}
+    for shard in range(total_shards):
+        values = [
             samples[validation_run, shard]
             for validation_run in range(1, validation_runs + 1)
-        )
-        for shard in range(total_shards)
-        if all(
-            (validation_run, shard) in samples
-            for validation_run in range(1, validation_runs + 1)
-        )
-    }
+            if (validation_run, shard) in samples
+        ]
+        if len(values) >= required_runs:
+            medians[shard] = statistics.median(values)
     ratio = max(medians.values()) / min(medians.values()) if medians else math.inf
     return medians, ratio, missing
 
@@ -969,9 +968,11 @@ def cmd_validate():
     print()
     print(f"Отношение самого медленного шарда к самому быстрому: {ratio:.3f}.")
 
-    if missing:
+    if len(medians) != total_shards:
         print(f"::error title=Неполная проверка шардов::Не хватает {len(missing)} успешных запусков.")
         sys.exit(1)
+    if missing:
+        print(f"::warning title=Неполная проверка шардов::Пропущено {len(missing)} неуспешных запусков.")
     if ratio > MAX_VALIDATION_SHARD_RATIO:
         print(
             "::warning title=Шарды распределены неровно::"
@@ -998,10 +999,12 @@ def cmd_choose():
             total_shards,
             model,
         )
-        _, ratio, missing = summarize_validation(samples, validation_runs, total_shards)
-        if missing:
+        medians, ratio, missing = summarize_validation(samples, validation_runs, total_shards)
+        if len(medians) != total_shards:
             print(f"Error: {model} is missing {len(missing)} validation runs", file=sys.stderr)
             sys.exit(1)
+        if missing:
+            print(f"Warning: {model} ignored {len(missing)} failed validation runs", file=sys.stderr)
         ratios[model] = ratio
 
     selected = min(ratios, key=ratios.get)
