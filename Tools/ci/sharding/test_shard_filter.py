@@ -203,6 +203,7 @@ def build_runsettings(filter_expr):
 <RunSettings>
   <NUnit>
     <DisplayName>FullName</DisplayName>
+    <AssemblySelectLimit>100000</AssemblySelectLimit>
     <MapWarningTo>Failed</MapWarningTo>
     <Where>{escape(filter_expr)}</Where>
   </NUnit>

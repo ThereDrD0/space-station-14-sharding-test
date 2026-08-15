@@ -58,7 +58,7 @@ class ShardFilterTests(unittest.TestCase):
             ["Suite.Test(1)", "Suite.Test(2)"],
         )
 
-    def test_builds_exact_filters_for_methods_and_cases(self):
+    def test_builds_exact_filters_and_runsettings(self):
         groups = [
             ("Alpha.Suite", "Plain", None),
             ("Beta.Suite", "Cases", "Beta.Suite.Cases(1)"),
@@ -66,6 +66,10 @@ class ShardFilterTests(unittest.TestCase):
         self.assertEqual(
             SHARD_FILTER.build_filter(groups),
             "(class=='Alpha.Suite'&&method=='Plain')||test=='Beta.Suite.Cases(1)'",
+        )
+        self.assertIn(
+            "<AssemblySelectLimit>100000</AssemblySelectLimit>",
+            SHARD_FILTER.build_runsettings("method=='Plain'"),
         )
 
     def test_splits_parameterized_method_that_exceeds_worker_budget(self):
