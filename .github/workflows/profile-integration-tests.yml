@@ -1,0 +1,277 @@
+name: Profile Integration Test Timings
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile_runs:
+        description: Количество полных повторов всех интеграционных тестов
+        required: true
+        default: '20'
+        type: choice
+        options:
+        - '10'
+        - '20'
+        - '30'
+        - '50'
+      max_parallel_runners:
+        description: Максимальное количество одновременно занятых GitHub-раннеров (1–16)
+        required: true
+        default: 8
+        type: number
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-test-timing-profile
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare profiling matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      validation_matrix: ${{ steps.matrix.outputs.validation_matrix }}
+      max_parallel: ${{ steps.matrix.outputs.max_parallel }}
+      profile_runs: ${{ steps.matrix.outputs.profile_runs }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # actions/checkout@v4.2.2
+
+    - name: Test sharding script
+      run: bash Tools/ci/test_workflow.sh test-sharding-script
+
+    - name: Validate inputs and create matrix
+      id: matrix
+      env:
+        PROFILE_RUNS: ${{ inputs.profile_runs || '10' }}
+        MAX_PARALLEL_RUNNERS: ${{ inputs.max_parallel_runners || 8 }}
+      run: bash Tools/ci/test_workflow.sh prepare-profile-matrix
+
+  build:
+    name: Build and discover tests
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # actions/checkout@v4.2.2
+
+    - name: Setup Submodule
+      run: bash Tools/ci/test_workflow.sh setup-root-submodules
+
+    - name: Pull engine updates
+      uses: space-wizards/submodule-dependency@548a726da00ca348ce9e1ea9f026da8f528caa71 # space-wizards/submodule-dependency@v0.1.5
+
+    - name: Update Engine Submodules
+      run: bash Tools/ci/test_workflow.sh setup-engine-submodules
+
+    - name: Setup .NET Core
+      uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25 # actions/setup-dotnet@v4.1.0
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Install dependencies
+      run: bash Tools/ci/test_workflow.sh restore-integration
+
+    - name: Build Project
+      run: bash Tools/ci/test_workflow.sh build-integration
+
+    - name: Discover Integration Tests
+      run: bash Tools/ci/test_workflow.sh discover-profile
+
+    - name: Prune build artifact
+      run: bash Tools/ci/test_workflow.sh prune-build profile
+
+    - name: Archive build output
+      run: bash Tools/ci/test_workflow.sh archive-build profile
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
+      with:
+        name: integration-profile-build
+        path: /tmp/integration-profile-build
+        retention-days: 1
+        compression-level: 0
+
+    - name: Upload discovery artifact
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
+      with:
+        name: integration-profile-discovery
+        path: integration-test-discovery.log
+        retention-days: 3
+
+  profile:
+    name: Profile shard ${{ matrix.shard }}
+    needs:
+    - prepare
+    - build
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(needs.prepare.outputs.max_parallel) }}
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+    - name: Setup .NET Core
+      uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25 # actions/setup-dotnet@v4.1.0
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Download build artifact
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # actions/download-artifact@v4
+      with:
+        name: integration-profile-build
+
+    - name: Extract build
+      run: bash Tools/ci/test_workflow.sh extract-build integration-profile-build.tar.zst
+
+    - name: Profile Content.IntegrationTests
+      env:
+        DOTNET_gcServer: '1'
+        PROFILE_MODE: profile
+        PROFILE_RUNS: ${{ needs.prepare.outputs.profile_runs }}
+        SAMPLE_PREFIX: integration-timing
+        SHARD: ${{ matrix.shard }}
+      run: bash Tools/ci/test_workflow.sh run-profile-repetitions
+
+    - name: Upload compact timing sample
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
+      with:
+        name: integration-timing-shard-${{ matrix.shard }}
+        path: /tmp/integration-timing-*-${{ matrix.shard }}.json
+        retention-days: 3
+        if-no-files-found: error
+
+  aggregate:
+    name: Build timing configuration
+    if: always() && needs.build.result == 'success'
+    needs:
+    - prepare
+    - build
+    - profile
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # actions/checkout@v4.2.2
+
+    - name: Download discovery
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # actions/download-artifact@v4
+      with:
+        name: integration-profile-discovery
+
+    - name: Download compact timing samples
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # actions/download-artifact@v4
+      with:
+        pattern: integration-timing-shard-*
+        path: integration-timing-samples
+        merge-multiple: true
+
+    - name: Aggregate timing configuration
+      env:
+        PROFILE_RUNS: ${{ needs.prepare.outputs.profile_runs }}
+      run: bash Tools/ci/test_workflow.sh aggregate-profile
+
+    - name: Upload timing candidate
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
+      with:
+        name: integration-timing-candidate
+        path: |
+          Tools/ci/sharding/integration_test_timings_total.json
+          Tools/ci/sharding/integration_test_timings_body.json
+          .integration-validation-filters-total
+          .integration-validation-filters-body
+        retention-days: 1
+        include-hidden-files: true
+        if-no-files-found: error
+
+  profile-validation:
+    name: Validate ${{ matrix.model }} shard ${{ matrix.shard }}
+    needs:
+    - prepare
+    - build
+    - aggregate
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(needs.prepare.outputs.max_parallel) }}
+      matrix: ${{ fromJSON(needs.prepare.outputs.validation_matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - name: Setup .NET Core
+      uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25 # actions/setup-dotnet@v4.1.0
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Download build artifact
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # actions/download-artifact@v4
+      with:
+        name: integration-profile-build
+
+    - name: Download timing candidate
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # actions/download-artifact@v4
+      with:
+        name: integration-timing-candidate
+
+    - name: Extract build
+      run: bash Tools/ci/test_workflow.sh extract-build integration-profile-build.tar.zst
+
+    - name: Validate Content.IntegrationTests
+      env:
+        DOTNET_gcServer: '1'
+        PROFILE_MODE: validation
+        PROFILE_MODEL: ${{ matrix.model }}
+        PROFILE_RUNS: 3
+        SAMPLE_PREFIX: integration-validation-${{ matrix.model }}
+        SHARD: ${{ matrix.shard }}
+      run: bash Tools/ci/test_workflow.sh run-profile-repetitions
+
+    - name: Upload validation sample
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
+      with:
+        name: integration-validation-${{ matrix.model }}-shard-${{ matrix.shard }}
+        path: /tmp/integration-validation-${{ matrix.model }}-*-${{ matrix.shard }}.json
+        retention-days: 3
+        if-no-files-found: error
+
+  validate:
+    name: Validate timing configuration
+    if: always() && needs.aggregate.result == 'success'
+    needs:
+    - aggregate
+    - profile-validation
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # actions/checkout@v4.2.2
+
+    - name: Download timing candidate
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # actions/download-artifact@v4
+      with:
+        name: integration-timing-candidate
+
+    - name: Download validation samples
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # actions/download-artifact@v4
+      with:
+        pattern: integration-validation-*
+        path: integration-validation-samples
+        merge-multiple: true
+
+    - name: Validate shard balance
+      id: comparison
+      env:
+        PROFILE_VALIDATION_RUNS: 3
+      run: bash Tools/ci/test_workflow.sh validate-profile
+
+    - name: Upload timing configuration
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
+      with:
+        name: integration-test-timings-${{ github.run_id }}
+        path: |
+          Tools/ci/sharding/integration_test_timings.json
+          Tools/ci/sharding/integration_test_timings_total.json
+          Tools/ci/sharding/integration_test_timings_body.json
+        retention-days: 14
+        if-no-files-found: error

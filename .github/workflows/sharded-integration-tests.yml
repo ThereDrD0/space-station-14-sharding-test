@@ -1,0 +1,120 @@
+name: Sharded Integration Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_parallel_runners:
+        description: Максимальное количество одновременно занятых GitHub-раннеров (1–8)
+        required: true
+        default: 8
+        type: number
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sharded-integration-tests
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Check sharding tools
+    runs-on: ubuntu-latest
+    outputs:
+      max_parallel: ${{ steps.inputs.outputs.max_parallel }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # actions/checkout@v4.2.2
+
+    - name: Test sharding script
+      run: bash Tools/ci/test_workflow.sh test-sharding-script
+
+    - name: Validate inputs
+      id: inputs
+      env:
+        MAX_PARALLEL_RUNNERS: ${{ inputs.max_parallel_runners }}
+      run: bash Tools/ci/test_workflow.sh prepare-sharded-run
+
+  build:
+    name: Build and split tests
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # actions/checkout@v4.2.2
+
+    - name: Setup Submodule
+      run: bash Tools/ci/test_workflow.sh setup-root-submodules
+
+    - name: Pull engine updates
+      uses: space-wizards/submodule-dependency@548a726da00ca348ce9e1ea9f026da8f528caa71 # space-wizards/submodule-dependency@v0.1.5
+
+    - name: Update Engine Submodules
+      run: bash Tools/ci/test_workflow.sh setup-engine-submodules
+
+    - name: Setup .NET Core
+      uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25 # actions/setup-dotnet@v4.1.0
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Restore integration tests
+      run: bash Tools/ci/test_workflow.sh restore-integration
+
+    - name: Build integration tests
+      run: bash Tools/ci/test_workflow.sh build-integration
+
+    - name: Split integration tests
+      run: bash Tools/ci/test_workflow.sh discover-shards 8
+
+    - name: Prune build artifact
+      run: bash Tools/ci/test_workflow.sh prune-build integration
+
+    - name: Archive build output
+      run: bash Tools/ci/test_workflow.sh archive-build integration
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
+      with:
+        name: integration-shard-build
+        path: /tmp/integration-shard-build
+        retention-days: 1
+        compression-level: 0
+
+  test:
+    name: Integration shard ${{ matrix.shard }}
+    needs: build
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(needs.prepare.outputs.max_parallel) }}
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - name: Setup .NET Core
+      uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25 # actions/setup-dotnet@v4.1.0
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Download build artifact
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # actions/download-artifact@v4
+      with:
+        name: integration-shard-build
+
+    - name: Extract build
+      run: bash Tools/ci/test_workflow.sh extract-build integration-shard-build.tar.zst
+
+    - name: Run integration shard
+      env:
+        DOTNET_gcServer: '1'
+        SHARD: ${{ matrix.shard }}
+      run: bash Tools/ci/test_workflow.sh run-integration-shard
+
+    - name: Upload test results and dumps
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
+      with:
+        name: integration-shard-${{ matrix.shard }}-results
+        path: /tmp/test-results
+        retention-days: 7
+        if-no-files-found: warn

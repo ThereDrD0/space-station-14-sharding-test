@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "generatedAtUtc": "2026-08-15T00:00:00Z",
+  "discoveryCommit": "f327d7992e0683f9885ed9e6f8232cb5ae1958a0",
+  "sourceRunIds": [
+    31854529025
+  ],
+  "profileRuns": 1,
+  "timingModel": "bootstrap",
+  "defaultCaseSeconds": 1.0,
+  "defaultMethodSeconds": 1.0,
+  "methodCaseSeconds": {},
+  "caseSeconds": {}
+}
