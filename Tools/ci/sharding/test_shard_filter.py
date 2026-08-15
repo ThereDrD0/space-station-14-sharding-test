@@ -142,7 +142,7 @@ def extract_groups(tests, timings, total_shards):
         estimates[key] = case_estimates
         total_seconds += sum(case_estimates)
 
-    target_seconds = total_seconds / total_shards
+    target_seconds = total_seconds / (total_shards * NUNIT_WORKERS)
     group_counts = {}
     group_seconds = {}
     for (fixture, method, full_method), cases in method_cases.items():

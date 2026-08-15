@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SHARDING_SCRIPT="$ROOT_DIR/Tools/ci/sharding/test_shard_filter.py"
 RESULTS_DIR=/tmp/test-results
 PROFILE_SHARD_COUNT=8
-PROFILE_MEASUREMENT_SHARD_COUNT=16
+PROFILE_MEASUREMENT_SHARD_COUNT=8
 cd "$ROOT_DIR"
 
 setup_root_submodules() {

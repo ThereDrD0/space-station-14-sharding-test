@@ -68,16 +68,17 @@ class ShardFilterTests(unittest.TestCase):
             "(class=='Alpha.Suite'&&method=='Plain')||test=='Beta.Suite.Cases(1)'",
         )
 
-    def test_splits_heavy_parameterized_method(self):
-        tests = ["Suite.Case(1)", "Suite.Case(2)"]
+    def test_splits_parameterized_method_that_exceeds_worker_budget(self):
+        tests = ["Suite.Case(1)", "Suite.Case(2)", "Other.Plain"]
         timings = timing_data(
             defaultCaseSeconds=0.1,
             defaultMethodSeconds=0.1,
-            caseSeconds={tests[0]: 10.0, tests[1]: 10.0},
+            caseSeconds={tests[0]: 10.0, tests[1]: 10.0, tests[2]: 30.0},
         )
         groups, _ = SHARD_FILTER.extract_groups(tests, timings, 2)
-        self.assertEqual(len(groups), 2)
-        self.assertTrue(all(group[2] is not None for group in groups))
+        case_groups = [group for group in groups if group[1] == "Case"]
+        self.assertEqual(len(case_groups), 2)
+        self.assertTrue(all(group[2] is not None for group in case_groups))
 
     def test_builds_profile_and_dual_validation_matrices(self):
         self.assertEqual(
