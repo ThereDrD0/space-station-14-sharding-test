@@ -82,7 +82,9 @@ jobs:
 
   test:
     name: Integration shard ${{ matrix.shard }}
-    needs: build
+    needs:
+    - prepare
+    - build
     strategy:
       fail-fast: false
       max-parallel: ${{ fromJSON(needs.prepare.outputs.max_parallel) }}
